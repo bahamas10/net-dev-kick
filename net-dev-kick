@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+#
+# Fix a network interface if the network is down.
+# This script attempts to ping a server that *should* always be up (use your
+# router or something similar) and if it fails, it restarts the interface given
+# as $1.
+#
+# This script is intended to be used on the raspberry pi to fix wlan0, but can
+# theoretically be used on any machine to fix any interface.
+#
+# Author: Dave Eddy <dave@daveeddy.com>
+# Date: January 16, 2017
+# License: MIT
+
+usage() {
+	local prog=${0##*/}
+	cat <<-EOF
+	Usage: $prog [-t <tries>] [-w <deadline>] <server|ip> <int1> [int2 ...]
+
+	Options:
+
+	  -h              print this message and exit
+	  -t <tries>      number of times to try the ping command, defaults to $tries
+	  -w <deadline>   passed to ping as -w, timeout in seconds for the ping command, defaults to $deadline
+
+	Example:
+
+	  $ net-dev-kick -t 5 -w 5 10.0.1.1 wlan0
+
+	This will attempt to ping 10.0.1.1 (presumably a router) 5 times
+	(maximum, -t 5) with a forced timeout on the ping command of 5 seconds
+	(-w 5).
+
+	If any ping is succesful, this program will exit cleanly.  If all 5 pings
+	fail, the interface wlan0 will be brought down and back up.
+	EOF
+}
+
+# check a host given as $1 to see if it is alive (preferably an IP address
+# so DNS resolution doesn't trigger a false-negative).
+check-alive() {
+	# Assumes the raspian version of ping
+	ping -w "$deadline" -n -c 1 -q "$1" &>/dev/null
+}
+
+deadline=5
+tries=5
+while getopts 'ht:w:' option; do
+	case "$option" in
+		h) usage; exit 0;;
+		t) tries=$OPTARG;;
+		w) deadline=$OPTARG;;
+		*) usage >&2; exit 1;;
+       esac
+done
+shift $((OPTIND - 1))
+
+server=$1
+shift
+interfaces=("$@")
+
+if [[ -z $server ]]; then
+	echo 'ERROR: server must be specified as $1' >&2
+	usage >&2
+	exit 1
+fi
+
+for ((i = 0; i < tries; i++)); do
+	check-alive "$server" && exit 0
+done
+
+# if we are here, the server is unresponsive
+echo "[$(date)] $server unresponsive, restarting interfaces ${interfaces[@]}"
+
+code=0
+for interface in "${interfaces[@]}"; do
+	echo -n "restarting $interface... "
+	/sbin/ifdown --force "$interface"
+	if /sbin/ifup "$interface"; then
+		echo 'done'
+	else
+		echo 'failed!'
+		code=1
+	fi
+done
+
+exit "$code"
